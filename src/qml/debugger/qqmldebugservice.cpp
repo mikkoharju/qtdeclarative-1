@@ -48,6 +48,7 @@
 #include <QtCore/QDebug>
 #include <QtCore/QStringList>
 #include <QtCore/QFileInfo>
+#include <QtCore/QCoreApplication>
 
 QT_BEGIN_NAMESPACE
 
@@ -262,7 +263,7 @@ void QQmlDebugService::clearObjectsFromHash()
 
 bool QQmlDebugService::isDebuggingEnabled()
 {
-    return QQmlDebugServer::instance() != 0;
+    return QCoreApplication::instance() && QQmlDebugServer::instance() != 0;
 }
 
 bool QQmlDebugService::hasDebuggingClient()

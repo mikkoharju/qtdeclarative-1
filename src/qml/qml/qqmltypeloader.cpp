@@ -87,9 +87,9 @@
 
 #ifdef DATABLOB_DEBUG
 
-#define ASSERT_MAINTHREAD() do { if(m_thread->isThisThread()) qFatal("QQmlDataLoader: Caller not in main thread"); } while(false)
-#define ASSERT_LOADTHREAD() do { if(!m_thread->isThisThread()) qFatal("QQmlDataLoader: Caller not in load thread"); } while(false)
-#define ASSERT_CALLBACK() do { if(!m_manager || !m_manager->m_thread->isThisThread()) qFatal("QQmlDataBlob: An API call was made outside a callback"); } while(false)
+#define ASSERT_MAINTHREAD() do { if (m_thread && m_thread->isThisThread()) qFatal("QQmlTypeLoader: Caller not in main thread"); } while (false)
+#define ASSERT_LOADTHREAD() do { if (m_thread && !m_thread->isThisThread()) qFatal("QQmlTypeLoader: Caller not in load thread"); } while (false)
+#define ASSERT_CALLBACK() do { if(!m_manager || (m_manager->m_thread && !m_manager->m_thread->isThisThread())) qFatal("QQmlDataBlob: An API call was made outside a callback"); } while(false)
 
 #else
 
@@ -367,7 +367,7 @@ May only be called from the load thread, or after the blob isCompleteOrError().
 */
 QUrl QQmlDataBlob::finalUrl() const
 {
-    Q_ASSERT(isCompleteOrError() || (m_manager && m_manager->m_thread->isThisThread()));
+    Q_ASSERT(isCompleteOrError() || (m_manager && (!m_manager->m_thread || m_manager->m_thread->isThisThread())));
     return m_finalUrl;
 }
 
@@ -376,7 +376,7 @@ Returns the finalUrl() as a string.
 */
 QString QQmlDataBlob::finalUrlString() const
 {
-    Q_ASSERT(isCompleteOrError() || (m_manager && m_manager->m_thread->isThisThread()));
+    Q_ASSERT(isCompleteOrError() || (m_manager && (!m_manager->m_thread || m_manager->m_thread->isThisThread())));
     if (m_finalUrlString.isEmpty())
         m_finalUrlString = m_finalUrl.toString();
 
@@ -624,7 +624,15 @@ void QQmlDataBlob::tryDone()
 #ifdef DATABLOB_DEBUG
         qWarning("QQmlDataBlob: Dispatching completed");
 #endif
-        m_manager->m_thread->callCompleted(this);
+        if (m_manager->m_thread)
+            m_manager->m_thread->callCompleted(this);
+        else {
+            QML_MEMORY_SCOPE_URL(url());
+#ifdef DATABLOB_DEBUG
+            qWarning("QQmlTypeLoaderThread: %s completed() callback in main thread", qPrintable(url().toString()));
+#endif
+            completed();
+        }
 
         release();
     }
@@ -890,8 +898,9 @@ Thus QQmlDataBlob::done() will always eventually be called, even if the blob has
 Create a new QQmlDataLoader for \a engine.
 */
 QQmlDataLoader::QQmlDataLoader(QQmlEngine *engine)
-: m_engine(engine), m_thread(new QQmlDataLoaderThread(this))
+: m_engine(engine), m_thread(0)
 {
+    tryStartThread();
 }
 
 /*! \internal */
@@ -915,12 +924,14 @@ void QQmlDataLoader::invalidate()
 
 void QQmlDataLoader::lock()
 {
-    m_thread->lock();
+    if (m_thread)
+        m_thread->lock();
 }
 
 void QQmlDataLoader::unlock()
 {
-    m_thread->unlock();
+    if (m_thread)
+        m_thread->unlock();
 }
 
 /*!
@@ -932,20 +943,31 @@ void QQmlDataLoader::load(QQmlDataBlob *blob, Mode mode)
 {
 #ifdef DATABLOB_DEBUG
     qWarning("QQmlDataLoader::load(%s): %s thread", qPrintable(blob->m_url.toString()),
-             m_thread->isThisThread()?"Compile":"Engine");
+             m_thread && m_thread->isThisThread()?"Compile":"Engine");
 #endif
     blob->startLoading(this);
 
-    if (m_thread->isThisThread()) {
+    if (!m_thread && mode == Asynchronous) {
+        qWarning("Falling back to PreferSynchronous loading for %s, no event loop", qPrintable(blob->url().toString()));
+        mode = PreferSynchronous;
+    }
+
+    if (m_thread && m_thread->isThisThread()) {
         unlock();
         loadThread(blob);
         lock();
     } else if (mode == PreferSynchronous) {
-        unlock();
-        m_thread->load(blob);
-        lock();
+        QElapsedTimer et; et.start();
+        if (m_thread) {
+            unlock();
+            m_thread->load(blob);
+            lock();
+        } else {
+            loadThread(blob);
+        }
         if (!blob->isCompleteOrError())
             blob->m_data.setIsAsync(true);
+        qDebug() << "Loaded" << blob->finalUrl() << "in" << et.elapsed() << "ms";
     } else {
         Q_ASSERT(mode == Asynchronous);
         blob->m_data.setIsAsync(true);
@@ -964,19 +986,23 @@ void QQmlDataLoader::loadWithStaticData(QQmlDataBlob *blob, const QByteArray &da
 {
 #ifdef DATABLOB_DEBUG
     qWarning("QQmlDataLoader::loadWithStaticData(%s, data): %s thread", qPrintable(blob->m_url.toString()),
-             m_thread->isThisThread()?"Compile":"Engine");
+             m_thread && m_thread->isThisThread()?"Compile":"Engine");
 #endif
 
     blob->startLoading(this);
 
-    if (m_thread->isThisThread()) {
+    if (m_thread && m_thread->isThisThread()) {
         unlock();
         loadWithStaticDataThread(blob, data);
         lock();
     } else if (mode == PreferSynchronous) {
-        unlock();
-        m_thread->loadWithStaticData(blob, data);
-        lock();
+        if (m_thread) {
+            unlock();
+            m_thread->loadWithStaticData(blob, data);
+            lock();
+        } else {
+            loadWithStaticDataThread(blob, data);
+        }
         if (!blob->isCompleteOrError())
             blob->m_data.setIsAsync(true);
     } else {
@@ -1029,7 +1055,7 @@ void QQmlDataLoader::loadThread(QQmlDataBlob *blob)
     ASSERT_LOADTHREAD();
 
     // Don't continue loading if we've been shutdown
-    if (m_thread->isShutdown()) {
+    if (m_thread && m_thread->isShutdown()) {
         QQmlError error;
         error.setDescription(QLatin1String("Interrupted by shutdown"));
         blob->setError(error);
@@ -1172,9 +1198,9 @@ gets called in the correct thread.
 void QQmlDataLoader::initializeEngine(QQmlExtensionInterface *iface,
                                               const char *uri)
 {
-    Q_ASSERT(m_thread->isThisThread() || engine()->thread() == QThread::currentThread());
+    Q_ASSERT((m_thread && m_thread->isThisThread()) || engine()->thread() == QThread::currentThread());
 
-    if (m_thread->isThisThread()) {
+    if (m_thread && m_thread->isThisThread()) {
         m_thread->initializeEngine(iface, uri);
     } else {
         Q_ASSERT(engine()->thread() == QThread::currentThread());
@@ -1239,6 +1265,13 @@ void QQmlDataLoader::shutdownThread()
 {
     if (m_thread && !m_thread->isShutdown())
         m_thread->shutdown();
+}
+
+void QQmlDataLoader::tryStartThread()
+{
+    // Create loader thread only after Q*Application instance
+    if (!m_thread && QCoreApplication::instance())
+        m_thread = new QQmlDataLoaderThread(this);
 }
 
 QQmlTypeLoader::Blob::Blob(const QUrl &url, QQmlDataBlob::Type type, QQmlTypeLoader *loader)
@@ -1600,6 +1633,10 @@ QQmlTypeData *QQmlTypeLoader::getType(const QUrl &url, Mode mode)
     Q_ASSERT(!url.isRelative() &&
             (QQmlFile::urlToLocalFileOrQrc(url).isEmpty() ||
              !QDir::isRelativePath(QQmlFile::urlToLocalFileOrQrc(url))));
+
+    // Should be safe: when loading types, no qml objects are created
+    //  => not possible to instantiate QCoreApplication
+    tryStartThread();
 
     LockHolder<QQmlTypeLoader> holder(this);
 

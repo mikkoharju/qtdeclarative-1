@@ -237,6 +237,7 @@ public:
 
 protected:
     void shutdownThread();
+    void tryStartThread();
 
 private:
     friend class QQmlDataBlob;

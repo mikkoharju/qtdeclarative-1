@@ -1576,7 +1576,8 @@ QQmlImportDatabase::QQmlImportDatabase(QQmlEngine *e)
             addImportPath(paths.at(ii));
     }
 
-    addImportPath(QCoreApplication::applicationDirPath());
+    if (QCoreApplication::instance())
+        addImportPath(QCoreApplication::applicationDirPath());
 }
 
 QQmlImportDatabase::~QQmlImportDatabase()
