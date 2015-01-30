@@ -26,6 +26,13 @@
 #ifndef VMTags_h
 #define VMTags_h
 
+#if OS(LINUX)
+#include <sys/prctl.h>
+#if defined(PR_SET_VMA_ANON_NAME)
+# define HAVE_PR_SET_VMA_ANON_NAME
+#endif
+#endif
+
 // On Mac OS X, the VM subsystem allows tagging memory requested from mmap and vm_map
 // in order to aid tools that inspect system memory use. 
 #if OS(DARWIN)
@@ -62,7 +69,15 @@
 #define VM_TAG_FOR_WEBCORE_PURGEABLE_MEMORY VM_MAKE_TAG(69)
 #endif // defined(VM_MEMORY_WEBCORE_PURGEABLE_BUFFERS)
 
-#else // OS(DARWIN)
+#elif defined(HAVE_PR_SET_VMA_ANON_NAME)
+
+#define VM_TAG_FOR_TCMALLOC_MEMORY 0
+#define VM_TAG_FOR_COLLECTOR_MEMORY 1
+#define VM_TAG_FOR_EXECUTABLEALLOCATOR_MEMORY 2
+#define VM_TAG_FOR_REGISTERFILE_MEMORY 3
+#define VM_TAG_FOR_WEBCORE_PURGEABLE_MEMORY 4
+
+#else // HAVE_PR_SET_VMA_ANON_NAME
 
 #define VM_TAG_FOR_TCMALLOC_MEMORY -1
 #define VM_TAG_FOR_COLLECTOR_MEMORY -1

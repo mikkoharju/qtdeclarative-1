@@ -119,6 +119,16 @@ void* OSAllocator::reserveAndCommit(size_t bytes, Usage usage, bool writable, bo
 #endif
             CRASH();
     }
+#if defined(HAVE_PR_SET_VMA_ANON_NAME)
+    if (result) {
+        const char *name = 0;
+        if (usage == JSGCHeapPages) name = "js";
+        else if (usage == JSJITCodePages) name = "jit";
+        else if (usage == JSVMStackPages) name = "jsstack";
+        if (name)
+            prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, result, bytes, (unsigned long)name);
+    }
+#endif
     if (result && includesGuardPages) {
         // We use mmap to remap the guardpages rather than using mprotect as
         // mprotect results in multiple references to the code region.  This
