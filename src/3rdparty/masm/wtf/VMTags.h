@@ -26,6 +26,9 @@
 #ifndef VMTags_h
 #define VMTags_h
 
+#define PR_SET_VMA 0x53564d41
+# define PR_SET_VMA_ANON_NAME 0
+
 #if OS(LINUX)
 #include <sys/prctl.h>
 #if defined(PR_SET_VMA_ANON_NAME)
